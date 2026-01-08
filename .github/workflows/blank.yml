@@ -1,0 +1,64 @@
+name: VS Code on Cloud (Cloudflare Tunnel)
+
+on:
+  workflow_dispatch: # 手動で実行
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install code-server and cloudflared
+        run: |
+          # 1. code-serverのインストール
+          curl -fsSL https://code-server.dev/install.sh | sh -s -- --method=standalone --prefix=/tmp/code-server
+
+          # 2. cloudflaredのインストール (Cloudflare Tunnelクライアント)
+          curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared
+          chmod +x cloudflared
+          sudo mv cloudflared /usr/local/bin
+
+      - name: Generate Password and Start Services
+        id: start
+        run: |
+          # --- ランダムパスワードの生成 ---
+          PASSWORD=$(openssl rand -hex 16)
+          echo "GENERATED_PASSWORD=$PASSWORD" >> $GITHUB_ENV
+
+          # --- VS Codeの起動 ---
+          # バックグラウンドで起動 (ポート8080)
+          /tmp/code-server/bin/code-server --bind-addr 0.0.0.0:8080 --auth password $PASSWORD &
+          
+          # 起動待機
+          sleep 5
+
+          # --- Cloudflare Tunnelの起動 ---
+          # ログをファイルに出力しつつバックグラウンドで実行
+          cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
+
+          # トンネル確立待機
+          sleep 10
+
+          # --- アクセス情報の表示 ---
+          echo ""
+          echo "=========================================="
+          echo "Access URL & Info"
+          echo "=========================================="
+          echo "🔒 Password: $PASSWORD"
+          echo "🔗 URL:"
+          # ログからURLを抽出して表示
+          grep -m 1 "https://" tunnel.log | grep -oE 'https://[^[:space:]]+'
+          echo "=========================================="
+          echo ""
+
+      - name: Keep Alive (Max 6 hours)
+        run: |
+          # GitHub Actionsのタイムアウト（6時間）までジョブを維持し続ける
+          # これがないと処理が終了して環境が消えます
+          for i in {1..360}; do
+            echo "Keeping workflow alive... ($i/360 min)"
+            sleep 60
+          done
