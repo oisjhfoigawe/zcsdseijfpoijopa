@@ -1,4 +1,4 @@
-name: VS Code on Cloud (Strict Check)
+name: VS Code on Cloud (Fixed Password)
 
 on:
   workflow_dispatch:
@@ -13,10 +13,7 @@ jobs:
 
       - name: Install code-server and cloudflared
         run: |
-          # 1. code-serverのインストール
           curl -fsSL https://code-server.dev/install.sh | sh -s -- --method=standalone --prefix=/tmp/code-server
-
-          # 2. cloudflaredのインストール
           curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared
           chmod +x cloudflared
           sudo mv cloudflared /usr/local/bin
@@ -29,28 +26,22 @@ jobs:
           echo "GENERATED_PASSWORD=$PASSWORD" >> $GITHUB_ENV
 
           # --- VS Code起動 ---
-          /tmp/code-server/bin/code-server --bind-addr 0.0.0.0:8080 --auth password $PASSWORD &
+          # [重要修正] コマンドの前に PASSWORD="$PASSWORD" を記述し、
+          # 環境変数として正しく渡すようにしました
+          PASSWORD="$PASSWORD" /tmp/code-server/bin/code-server --bind-addr 0.0.0.0:8080 --auth password &
           
           # --- Cloudflare Tunnel起動 ---
-          # ログをtunnel.logに出力
           cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
 
           echo "Waiting for tunnel URL..."
 
-          # --- ここが修正点 ---
-          # 「https://...trycloudflare.com」というパターンがログに出るまで最大60秒待ちます
-          # grepで -m 1 (最初の1件) と -E (正規表現) を使って厳密にURLを待ちます
+          # --- URL待機 ---
           timeout 60 bash -c 'until grep -m 1 -E "https://.*\.trycloudflare\.com" tunnel.log; do sleep 1; done' || {
             echo "❌ Error: Tunnel URL did not appear within 60 seconds."
-            echo "--- Debug Log (last 30 lines) ---"
             tail -n 30 tunnel.log
-            echo "-----------------------------------"
-            echo "The connection might be blocked or timed out."
             exit 1
           }
 
-          # --- URLの抽出 ---
-          # ログからURL部分だけを切り出し
           URL=$(grep -m 1 -E "https://.*\.trycloudflare\.com" tunnel.log | grep -oE 'https://[^[:space:]]+')
 
           # --- 結果表示 ---
