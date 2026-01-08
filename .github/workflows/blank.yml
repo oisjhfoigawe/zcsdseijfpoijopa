@@ -1,4 +1,4 @@
-name: VS Code on Cloud (Fixed)
+name: VS Code on Cloud (Strict Check)
 
 on:
   workflow_dispatch:
@@ -35,37 +35,29 @@ jobs:
           # ログをtunnel.logに出力
           cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
 
-          echo "Waiting for tunnel connection..."
-          
-          # --- URL取得の待機ロジック (ここが重要) ---
-          # トンネルが確立され、ログに 'trycloudflare.com' が含まれるまで最大60秒待つ
-          # 利用規約のURLなどをスキップし、正しいURLのみを抽出します
-          for i in {1..60}; do
-            if grep -q "trycloudflare.com" tunnel.log; then
-              echo "Tunnel established!"
-              break
-            fi
-            sleep 1
-          done
+          echo "Waiting for tunnel URL..."
+
+          # --- ここが修正点 ---
+          # 「https://...trycloudflare.com」というパターンがログに出るまで最大60秒待ちます
+          # grepで -m 1 (最初の1件) と -E (正規表現) を使って厳密にURLを待ちます
+          timeout 60 bash -c 'until grep -m 1 -E "https://.*\.trycloudflare\.com" tunnel.log; do sleep 1; done' || {
+            echo "❌ Error: Tunnel URL did not appear within 60 seconds."
+            echo "--- Debug Log (last 30 lines) ---"
+            tail -n 30 tunnel.log
+            echo "-----------------------------------"
+            echo "The connection might be blocked or timed out."
+            exit 1
+          }
 
           # --- URLの抽出 ---
-          # 'trycloudflare.com' を含む行から、https://... の部分だけを切り出す
-          URL=$(grep "trycloudflare.com" tunnel.log | grep -oE 'https://[^[:space:]]+' | head -n 1)
+          # ログからURL部分だけを切り出し
+          URL=$(grep -m 1 -E "https://.*\.trycloudflare\.com" tunnel.log | grep -oE 'https://[^[:space:]]+')
 
           # --- 結果表示 ---
           echo ""
           echo "=========================================="
           echo "Access URL & Info"
           echo "=========================================="
-          
-          if [ -z "$URL" ]; then
-            echo "⚠️ Error: Could not retrieve tunnel URL."
-            echo "--- Debug Log (last 20 lines) ---"
-            tail -n 20 tunnel.log
-            echo "-----------------------------------"
-            exit 1
-          fi
-
           echo "🔒 Password: $PASSWORD"
           echo "🔗 URL: $URL"
           echo "=========================================="
@@ -74,7 +66,6 @@ jobs:
       - name: Keep Alive
         if: success()
         run: |
-          # ジョブを維持
           for i in {1..360}; do
             echo "Keeping workflow alive... ($i/360 min)"
             sleep 60
